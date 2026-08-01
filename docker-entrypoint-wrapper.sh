@@ -18,18 +18,21 @@ set -e
 # secret_key from the shared env var, no site_url) on every boot, and
 # they don't handle uploads, see local.php and wait_for_mautic_install.sh
 # in this repo for why that's correct rather than an oversight.
-echo "[wrapper]: DOCKER_MAUTIC_ROLE=${DOCKER_MAUTIC_ROLE}"
-echo "[wrapper]: /mnt/mautic-persist exists? $([ -d /mnt/mautic-persist ] && echo yes || echo no)"
-ls -la /mnt/ 2>&1 || echo "[wrapper]: /mnt does not exist at all"
-
 if [ "$DOCKER_MAUTIC_ROLE" = "mautic_web" ]; then
   echo "[wrapper]: setting up persistent config/media symlinks"
   mkdir -p /mnt/mautic-persist/config /mnt/mautic-persist/media
   rm -rf /var/www/html/config /var/www/html/docroot/media
   ln -s /mnt/mautic-persist/config /var/www/html/config
   ln -s /mnt/mautic-persist/media /var/www/html/docroot/media
-  echo "[wrapper]: config symlink: $(readlink -f /var/www/html/config)"
-  echo "[wrapper]: config contents: $(ls -la /mnt/mautic-persist/config 2>&1)"
+
+  # chown -R on a symlink argument chowns the symlink itself, not what it
+  # points to - confirmed via a real deploy where Apache/PHP got
+  # "Permission denied" writing to media even though the base image's own
+  # check_volumes_exist_ownership.sh (which we override, see that file)
+  # ran a chown against these now-symlinked paths. The real target
+  # directories need chowning directly, before anything tries to write
+  # through the symlinks.
+  chown -R www-data:www-data /mnt/mautic-persist/config /mnt/mautic-persist/media
 fi
 
 exec /entrypoint.sh "$@"
