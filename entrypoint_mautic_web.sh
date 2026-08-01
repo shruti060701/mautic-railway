@@ -45,24 +45,34 @@ if is_mautic_schema_installed; then
 else
   log "[mautic_web]: Running mautic:install for the first time."
   su -s /bin/bash "$MAUTIC_WWW_USER" -c "php $MAUTIC_CONSOLE mautic:install --force --admin_email=\"$MAUTIC_ADMIN_EMAIL\" --admin_password=\"$MAUTIC_ADMIN_PASSWORD\" \"$MAUTIC_URL\""
-
-  # A genuine first-time install generates a fresh random secret_key
-  # (EncryptionHelper::generateKey(), confirmed via Mautic's real
-  # InstallService.php source) and writes it into THIS service's own
-  # local.php, overwriting the deterministic MAUTIC_SECRET_KEY value our
-  # template pre-populated. Patch it back to the shared env var value so
-  # worker and cron, which independently generate their own local.php from
-  # the exact same env var and never run install themselves, end up with an
-  # identical key. Without this, worker/cron couldn't decrypt anything web
-  # encrypts (OAuth tokens, some integration credentials).
-  log "[mautic_web]: Syncing secret_key to the shared MAUTIC_SECRET_KEY value."
-  php -r "
-  \$configFile = getenv('MAUTIC_VOLUME_CONFIG') . '/local.php';
-  include \$configFile;
-  \$parameters['secret_key'] = getenv('MAUTIC_SECRET_KEY');
-  file_put_contents(\$configFile, '<?php' . PHP_EOL . '\$parameters = ' . var_export(\$parameters, true) . ';' . PHP_EOL);
-  "
 fi
+
+# Whichever branch above ran, local.php needs both site_url and
+# secret_key set to our known values before Apache starts serving real
+# requests:
+# - A genuine first-time install writes a real site_url (good) but also
+#   generates a fresh random secret_key (EncryptionHelper::generateKey(),
+#   confirmed via Mautic's real InstallService.php source), overwriting
+#   the deterministic MAUTIC_SECRET_KEY our template pre-populated.
+# - The "already installed, skip" branch writes neither - local.php was
+#   only just freshly created from our template this boot (config isn't
+#   guaranteed to have survived from install time on every deploy path),
+#   which deliberately omits site_url (see local.php for why), so without
+#   this the web app would redirect every request to the installer even
+#   though the database is genuinely fully installed.
+# This patch makes both branches converge on the same correct state:
+# real site_url, and secret_key identical to worker/cron's (which
+# generate their own local.php from the same shared env var and never
+# run install themselves - without a matching key they couldn't decrypt
+# anything web encrypts, OAuth tokens, some integration credentials).
+log "[mautic_web]: Ensuring local.php has the correct site_url and secret_key."
+php -r "
+\$configFile = getenv('MAUTIC_VOLUME_CONFIG') . '/local.php';
+include \$configFile;
+\$parameters['site_url'] = getenv('MAUTIC_URL');
+\$parameters['secret_key'] = getenv('MAUTIC_SECRET_KEY');
+file_put_contents(\$configFile, '<?php' . PHP_EOL . '\$parameters = ' . var_export(\$parameters, true) . ';' . PHP_EOL);
+"
 
 log "[mautic_web]: Running migrations..."
 su -s /bin/bash "$MAUTIC_WWW_USER" -c "php $MAUTIC_CONSOLE doctrine:migrations:migrate -n"
