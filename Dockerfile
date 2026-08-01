@@ -23,4 +23,14 @@ COPY local.php /templates/local.php
 COPY entrypoint_mautic_web.sh /entrypoint_mautic_web.sh
 RUN chmod +x /entrypoint_mautic_web.sh
 
+# Overrides /startup/check_volumes_exist_ownership.sh: the stock version
+# only checks that six specific directories already exist and hard-fails
+# if not, assuming a real docker-compose deploy gave each its own
+# auto-created volume. Railway only supports one volume per service, so
+# this creates the missing ones instead of failing, confirmed necessary
+# via a real crash-loop during testing (config/var/logs/media subdirs
+# don't exist in the base image and nothing else creates them).
+COPY check_volumes_exist_ownership.sh /startup/check_volumes_exist_ownership.sh
+RUN chmod +x /startup/check_volumes_exist_ownership.sh
+
 EXPOSE 80
