@@ -33,4 +33,13 @@ RUN chmod +x /entrypoint_mautic_web.sh
 COPY check_volumes_exist_ownership.sh /startup/check_volumes_exist_ownership.sh
 RUN chmod +x /startup/check_volumes_exist_ownership.sh
 
+# Overrides /startup/wait_for_mautic_install.sh: the stock version checks
+# local.php's own site_url field, which our template pre-populates on
+# every service from boot regardless of real install state (see local.php
+# in this repo). This checks the real database instead, used by worker
+# and cron (via their own unmodified stock entrypoint scripts, which call
+# this same path) and by entrypoint_mautic_web.sh above.
+COPY wait_for_mautic_install.sh /startup/wait_for_mautic_install.sh
+RUN chmod +x /startup/wait_for_mautic_install.sh
+
 EXPOSE 80
