@@ -1,14 +1,21 @@
 <?php
 // Custom replacement for the base image's own /templates/local.php.
-// Adds site_url and secret_key on top of the stock db_* fields, sourced
-// from the same shared env vars every service (web/worker/cron) receives,
-// so all three services generate byte-identical config on their own
-// isolated Railway volume, with no shared-volume dependency.
+// Adds secret_key on top of the stock db_* fields, sourced from a shared
+// env var every service (web/worker/cron) receives, so all three
+// services can decrypt the same data without a shared volume (Railway
+// doesn't support attaching one volume to multiple services, confirmed
+// via Railway's own community help station).
 //
-// Without this, only the web service (the one that runs mautic:install)
-// would ever get site_url/secret_key populated - worker and cron have no
-// way to see that file since Railway volumes are not shared across
-// services, confirmed via Railway's own community help station.
+// Deliberately does NOT set site_url here, unlike an earlier version of
+// this file. Mautic's own mautic:install command checks local.php's
+// site_url field directly (Install/InstallService.php's
+// checkIfInstalled()) to decide whether to skip installing - pre-setting
+// it here made every service look "already installed" from the moment
+// its own local.php is created, even on a genuinely fresh database,
+// confirmed via a real deploy where migrations then failed against
+// tables that were never created. Real install state is checked against
+// the database directly instead (see wait_for_mautic_install.sh and
+// entrypoint_mautic_web.sh), decoupled entirely from this file.
 $parameters = array(
 	'db_driver' => 'pdo_mysql',
 	'db_host' => getenv('MAUTIC_DB_HOST'),
@@ -19,6 +26,5 @@ $parameters = array(
 	'db_table_prefix' => null,
 	'db_backup_tables' => 1,
 	'db_backup_prefix' => 'bak_',
-	'site_url' => getenv('MAUTIC_URL'),
 	'secret_key' => getenv('MAUTIC_SECRET_KEY'),
 );

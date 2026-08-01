@@ -7,21 +7,28 @@
 # full rebuild to rotate - both avoided here.
 FROM mautic/mautic:7.1.3-apache
 
-# Overrides the base image's own /templates/local.php: adds site_url and
-# secret_key (sourced from shared env vars) on top of the stock db_*
-# fields, so every service (web/worker/cron) generates identical config
-# on its own isolated volume - Railway doesn't support sharing one volume
-# across services, confirmed via Railway's own community help station.
+# Overrides the base image's own /templates/local.php: adds secret_key
+# (sourced from a shared env var) on top of the stock db_* fields, so
+# every service (web/worker/cron) can decrypt the same data without a
+# shared volume (Railway doesn't support sharing one volume across
+# services, confirmed via Railway's own community help station).
+# Deliberately does NOT set site_url, see local.php for why.
 COPY local.php /templates/local.php
 
-# Overrides the base image's own /entrypoint_mautic_web.sh: always calls
-# mautic:install (safe due to its own built-in idempotency check) instead
-# of skipping it, since our local.php template above makes the stock
-# script's "already installed" check pass immediately regardless of real
-# install state. Worker and cron keep the base image's own unmodified
-# entrypoint scripts, which work correctly once local.php is populated.
+# Overrides the base image's own /entrypoint_mautic_web.sh: checks the
+# real database directly to decide whether to run mautic:install, instead
+# of relying on Mautic's own local.php-based check, which our regenerate
+# -on-every-boot local.php would otherwise defeat every time. Worker and
+# cron keep the base image's own unmodified entrypoint scripts.
 COPY entrypoint_mautic_web.sh /entrypoint_mautic_web.sh
 RUN chmod +x /entrypoint_mautic_web.sh
+
+# New top-level ENTRYPOINT (replacing the base image's own /entrypoint.sh
+# directly): symlinks web's config and media directories into one real
+# Railway Volume before handing off to the original entrypoint chain, see
+# docker-entrypoint-wrapper.sh for why both need to persist.
+COPY docker-entrypoint-wrapper.sh /docker-entrypoint-wrapper.sh
+RUN chmod +x /docker-entrypoint-wrapper.sh
 
 # Overrides /startup/check_volumes_exist_ownership.sh: the stock version
 # only checks that six specific directories already exist and hard-fails
@@ -41,5 +48,7 @@ RUN chmod +x /startup/check_volumes_exist_ownership.sh
 # this same path) and by entrypoint_mautic_web.sh above.
 COPY wait_for_mautic_install.sh /startup/wait_for_mautic_install.sh
 RUN chmod +x /startup/wait_for_mautic_install.sh
+
+ENTRYPOINT ["/docker-entrypoint-wrapper.sh"]
 
 EXPOSE 80
