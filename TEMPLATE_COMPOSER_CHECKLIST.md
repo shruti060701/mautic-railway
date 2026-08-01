@@ -46,7 +46,7 @@ Mautic's official Docker image normally expects web, worker, and cron to share o
 | `MAUTIC_DB_DATABASE` | `${{MySQL.MYSQLDATABASE}}` | No | Database name. The real image expects `MAUTIC_DB_DATABASE`, not `MAUTIC_DB_NAME` (confirmed directly in Mautic's own `docker-mautic` source), the reference Railway template uses the wrong variable name here. Confirmed real MySQL plugin variable name live. |
 | `MAUTIC_DB_USER` | `${{MySQL.MYSQLUSER}}` | No | MySQL username. Confirmed real variable name live. |
 | `MAUTIC_DB_PASSWORD` | `${{MySQL.MYSQLPASSWORD}}` | No | MySQL password. Confirmed real variable name live. |
-| `MAUTIC_URL` | `https://${{mautic-railway.RAILWAY_PUBLIC_DOMAIN}}` | No | Must be identical on all three services, cross-referenced from the web service's own domain. Confirmed live as `https://mautic-railway-production.up.railway.app`. |
+| `MAUTIC_URL` | **`mautic-railway`**: `https://${{RAILWAY_PUBLIC_DOMAIN}}` (its own domain, no cross-reference). **`harmonious-light` / `focused-encouragement`**: `${{mautic-railway.MAUTIC_URL}}` (references web's already-built `MAUTIC_URL` directly, not `RAILWAY_PUBLIC_DOMAIN` again, and no `https://` prefix needed since the referenced value already has one). | No | Confirmed live as `https://mautic-railway-production.up.railway.app` on all three. An earlier draft of this checklist wrongly showed `https://${{mautic-railway.RAILWAY_PUBLIC_DOMAIN}}` on all three rows, including web referencing itself, caught directly by Shruti comparing the dashboard's real value against this file. |
 | `MAUTIC_SECRET_KEY` | `${{secret(32)}}` set once on `mautic-railway`, then `${{mautic-railway.MAUTIC_SECRET_KEY}}` on the other two | No | Must be byte-identical across all three, confirmed live via SHA-256 hash comparison without printing the value. |
 
 ### `mautic-railway` only (worker/cron don't need these)
@@ -56,6 +56,22 @@ Mautic's official Docker image normally expects web, worker, and cron to share o
 | `MAUTIC_ADMIN_EMAIL` | User-provided | No | Admin account email created on first install. |
 | `MAUTIC_ADMIN_PASSWORD` | `${{secret(32)}}` | No | Admin account password created on first install. |
 | `PORT` | `80` | **Yes** | Set explicitly during testing; did not actually resolve the 502/targetPort issue on its own, the real fix was the dashboard target-port field (see section 1). Keep this set regardless since it's a reasonable Railway convention, but don't rely on it alone. |
+
+### `MySQL` (Native Plugin) Variables
+
+Real values pulled directly from the live `MySQL` service via `railway variables --json`, not placeholders. Every variable in the platform-injected "N variables added by Railway" collapsed section (`RAILWAY_ENVIRONMENT`, `RAILWAY_PROJECT_ID`, `RAILWAY_VOLUME_ID`, etc.) still needs a description in the actual composer even though it's not template-specific, confirmed live the composer's own validation requires it regardless of origin (see the equivalent note on Infisical's checklist for the full explanation, same platform behavior here).
+
+| Variable | Value | Mark Optional? | Description |
+|----------|-------|-----------------|-------------|
+| `MYSQLHOST` | `${{RAILWAY_PRIVATE_DOMAIN}}` | **Yes** | Private-network hostname for this service. Confirmed live as `mysql.railway.internal`. |
+| `MYSQLPORT` | `3306` | **Yes** | Port MySQL listens on. |
+| `MYSQLDATABASE` | `railway` | **Yes** | Default database name. This is what `MAUTIC_DB_DATABASE` on the app services references. |
+| `MYSQLUSER` | `root` | **Yes** | Superuser username. |
+| `MYSQLPASSWORD` | `${{secret(32)}}` | No | Superuser password, auto-generated per deploy. |
+| `MYSQL_DATABASE` | `${{MYSQLDATABASE}}` | **Yes** | Alias of `MYSQLDATABASE`, some MySQL client tools/images read this name instead. |
+| `MYSQL_ROOT_PASSWORD` | `${{MYSQLPASSWORD}}` | No | Alias of `MYSQLPASSWORD`, the name the underlying `mysql:9.4` image itself expects for the root password. |
+| `MYSQL_URL` | `mysql://${{MYSQLUSER}}:${{MYSQLPASSWORD}}@${{RAILWAY_PRIVATE_DOMAIN}}:3306/${{MYSQLDATABASE}}` | No | Full private-network connection string. Confirmed live, matches the real resolved shape (`mysql://root:[password]@mysql.railway.internal:3306/railway`). Not directly referenced by the app services, they build their own connection from the individual `MYSQL*` variables instead, but document it since the composer will show it. |
+| `MYSQL_PUBLIC_URL` | `mysql://${{MYSQLUSER}}:${{MYSQLPASSWORD}}@${{RAILWAY_TCP_PROXY_DOMAIN}}:${{RAILWAY_TCP_PROXY_PORT}}/${{MYSQLDATABASE}}` | **Yes** | Public connection string. Only resolves to a real host/port once a TCP Proxy is enabled under this service's Settings → Networking, confirmed live it's an empty/unusable host:port until then. |
 
 ---
 
