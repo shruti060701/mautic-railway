@@ -77,6 +77,15 @@ file_put_contents(\$configFile, '<?php' . PHP_EOL . '\$parameters = ' . var_expo
 log "[mautic_web]: Running migrations..."
 su -s /bin/bash "$MAUTIC_WWW_USER" -c "php $MAUTIC_CONSOLE doctrine:migrations:migrate -n"
 
+# Mautic logs its own caught exceptions (via ExceptionListener's Monolog
+# logger, confirmed via real source) to a file under var/logs, not
+# stdout/stderr, so real errors (e.g. the "Site is offline" generic page)
+# never show up in `railway logs`. Tail whatever gets written there into
+# this container's own stdout so real errors are actually visible.
+mkdir -p "${MAUTIC_VOLUME_LOGS}"
+touch "${MAUTIC_VOLUME_LOGS}/.tail-placeholder"
+tail -F "${MAUTIC_VOLUME_LOGS}"/*.log "${MAUTIC_VOLUME_LOGS}"/*.php 2>/dev/null &
+
 if [ "${FLAVOUR}" = "fpm" ]; then
   php-fpm
 elif [ "${FLAVOUR}" = "apache" ]; then
