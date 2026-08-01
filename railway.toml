@@ -1,0 +1,11 @@
+[build]
+builder = "dockerfile"
+dockerfilePath = "Dockerfile"
+
+# No [deploy] section here deliberately: railway.toml applies to every
+# service connected to this repo, not just one (established lesson from
+# this project's other multi-service templates). All three Mautic
+# services (web, worker, cron) build from the identical Dockerfile above,
+# but only web should have an HTTP healthcheck - worker and cron have no
+# public port and would fail an HTTP healthcheck immediately. Healthcheck
+# and restart policy are configured per-service in the dashboard instead.
