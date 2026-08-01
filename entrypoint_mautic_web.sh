@@ -86,6 +86,15 @@ mkdir -p "${MAUTIC_VOLUME_LOGS}"
 touch "${MAUTIC_VOLUME_LOGS}/.tail-placeholder"
 tail -F "${MAUTIC_VOLUME_LOGS}"/*.log "${MAUTIC_VOLUME_LOGS}"/*.php 2>/dev/null &
 
+# A real matching case on Mautic's own forum ("Site is offline after
+# update to 6.0") traced the identical generic error page to var/cache
+# and var/tmp/twig not being writable by the web server user - those
+# subdirectories don't exist yet at container-check time (Symfony creates
+# them on first real request), so the earlier check_volumes_exist_ownership
+# chown, which only touches paths that already exist, never reaches them.
+# Force ownership of the whole var tree right before Apache starts.
+chown -R "${MAUTIC_WWW_USER}:${MAUTIC_WWW_GROUP}" "${MAUTIC_VAR}"
+
 if [ "${FLAVOUR}" = "fpm" ]; then
   php-fpm
 elif [ "${FLAVOUR}" = "apache" ]; then
