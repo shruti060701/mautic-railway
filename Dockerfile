@@ -56,6 +56,21 @@ RUN chmod +x /startup/check_volumes_exist_ownership.sh
 COPY wait_for_mautic_install.sh /startup/wait_for_mautic_install.sh
 RUN chmod +x /startup/wait_for_mautic_install.sh
 
+# Overrides a real Mautic 7.1.3 bug (confirmed via a real deploy crash,
+# root-caused via Mautic's own prod log): OverrideIncludeExtension.php
+# declares includeWithEvent() as returning `string`, but Twig 3.28+
+# (bundled in this image) can return a Twig\Markup object from
+# CoreExtension::include(), causing a TypeError on every page that uses
+# the include() Twig function, which includes the login page. Already
+# fixed on Mautic's own main branch (return type widened to
+# string|Markup) but not yet in a released image tag as of authoring
+# time (latest tagged release is still 7.1.3, confirmed via Docker Hub's
+# tags API), matching a real, currently-open Mautic forum thread
+# reporting this exact crash after updating to 7.1.x. Ships the real
+# fixed file from Mautic's own main branch directly, re-verify this
+# override is still needed (and drop it) once a 7.2.0+ image is published.
+COPY OverrideIncludeExtension.php /var/www/html/docroot/app/bundles/CoreBundle/Twig/Extension/OverrideIncludeExtension.php
+
 ENTRYPOINT ["/docker-entrypoint-wrapper.sh"]
 
 EXPOSE 80
