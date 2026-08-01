@@ -61,15 +61,17 @@ Mautic's official Docker image normally expects web, worker, and cron to share o
 
 Real values pulled directly from the live `MySQL` service via `railway variables --json`, not placeholders. Every variable in the platform-injected "N variables added by Railway" collapsed section (`RAILWAY_ENVIRONMENT`, `RAILWAY_PROJECT_ID`, `RAILWAY_VOLUME_ID`, etc.) still needs a description in the actual composer even though it's not template-specific, confirmed live the composer's own validation requires it regardless of origin (see the equivalent note on Infisical's checklist for the full explanation, same platform behavior here).
 
+**Reference direction, confirmed against the real composer UI, not assumed**: `MYSQL_DATABASE` and `MYSQL_ROOT_PASSWORD` (underscore between MYSQL and the word) are the real, literal-valued source variables, the names the underlying `mysql:9.4` image itself expects. `MYSQLDATABASE` and `MYSQLPASSWORD` (no underscore) are Railway's own convenience aliases that **reference** those, prefilled automatically by Railway's native plugin template. Shruti caught this backwards in an earlier version of this table (it showed the alias as the literal and the real variable referencing the alias), confirmed live: the composer's own prefilled `MYSQLDATABASE` field already shows `${{MYSQL_DATABASE}}`, not a literal. **Don't overwrite an already-prefilled alias field with a literal value, leave it as the reference it already is**, same lesson as `PGHOST` being prefilled with `${{RAILWAY_PRIVATE_DOMAIN}}` on this project's Postgres-based templates.
+
 | Variable | Value | Mark Optional? | Description |
 |----------|-------|-----------------|-------------|
-| `MYSQLHOST` | `${{RAILWAY_PRIVATE_DOMAIN}}` | **Yes** | Private-network hostname for this service. Confirmed live as `mysql.railway.internal`. |
+| `MYSQLHOST` | `${{RAILWAY_PRIVATE_DOMAIN}}` | **Yes** | Private-network hostname for this service. Confirmed live as `mysql.railway.internal`. Already prefilled by Railway, don't overwrite. |
 | `MYSQLPORT` | `3306` | **Yes** | Port MySQL listens on. |
-| `MYSQLDATABASE` | `railway` | **Yes** | Default database name. This is what `MAUTIC_DB_DATABASE` on the app services references. |
 | `MYSQLUSER` | `root` | **Yes** | Superuser username. |
-| `MYSQLPASSWORD` | `${{secret(32)}}` | No | Superuser password, auto-generated per deploy. |
-| `MYSQL_DATABASE` | `${{MYSQLDATABASE}}` | **Yes** | Alias of `MYSQLDATABASE`, some MySQL client tools/images read this name instead. |
-| `MYSQL_ROOT_PASSWORD` | `${{MYSQLPASSWORD}}` | No | Alias of `MYSQLPASSWORD`, the name the underlying `mysql:9.4` image itself expects for the root password. |
+| `MYSQL_DATABASE` | `railway` | **Yes** | Default database name, the real literal value. This is what `MAUTIC_DB_DATABASE` on the app services ultimately resolves to via `MYSQLDATABASE`. |
+| `MYSQL_ROOT_PASSWORD` | `${{secret(32)}}` | No | Superuser password, auto-generated per deploy, the real literal value. |
+| `MYSQLDATABASE` | `${{MYSQL_DATABASE}}` | **Yes** | Alias referencing `MYSQL_DATABASE`. Already prefilled by Railway, don't overwrite with a literal. |
+| `MYSQLPASSWORD` | `${{MYSQL_ROOT_PASSWORD}}` | No | Alias referencing `MYSQL_ROOT_PASSWORD`. Already prefilled by Railway, don't overwrite with a literal. |
 | `MYSQL_URL` | `mysql://${{MYSQLUSER}}:${{MYSQLPASSWORD}}@${{RAILWAY_PRIVATE_DOMAIN}}:3306/${{MYSQLDATABASE}}` | No | Full private-network connection string. Confirmed live, matches the real resolved shape (`mysql://root:[password]@mysql.railway.internal:3306/railway`). Not directly referenced by the app services, they build their own connection from the individual `MYSQL*` variables instead, but document it since the composer will show it. |
 | `MYSQL_PUBLIC_URL` | `mysql://${{MYSQLUSER}}:${{MYSQLPASSWORD}}@${{RAILWAY_TCP_PROXY_DOMAIN}}:${{RAILWAY_TCP_PROXY_PORT}}/${{MYSQLDATABASE}}` | **Yes** | Public connection string. Only resolves to a real host/port once a TCP Proxy is enabled under this service's Settings → Networking, confirmed live it's an empty/unusable host:port until then. |
 
