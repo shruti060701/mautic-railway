@@ -27,6 +27,13 @@ RUN chmod +x /entrypoint_mautic_web.sh
 # directly): symlinks web's config and media directories into one real
 # Railway Volume before handing off to the original entrypoint chain, see
 # docker-entrypoint-wrapper.sh for why both need to persist.
+#
+# The mount point directory must already exist in the image at build
+# time - confirmed via a real deploy where Railway's own volume list
+# showed the volume correctly attached at /mnt/mautic-persist, but the
+# path was genuinely empty (not a real mount) inside the running
+# container, because nothing in this image ever created it beforehand.
+RUN mkdir -p /mnt/mautic-persist
 COPY docker-entrypoint-wrapper.sh /docker-entrypoint-wrapper.sh
 RUN chmod +x /docker-entrypoint-wrapper.sh
 
