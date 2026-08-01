@@ -2,24 +2,31 @@
 
 Apply these settings in the Railway template composer when generating the template from the project.
 
-**Expected services this template deploys:** `mautic-web`, `mautic-worker`, `mautic-cron` (all three GitHub-connected to the same repo/Dockerfile, differentiated only by `DOCKER_MAUTIC_ROLE`), `MySQL` (Railway native plugin). **This is a pre-deploy draft using expected variable names. Verify every value against the actual live service via `railway variables --json` once deployed, and update this file before using it in the composer, don't fill in the composer from this draft alone.**
+**Real live service names:** `mautic-railway` (web, GitHub-connected), `harmonious-light` (worker, same repo), `focused-encouragement` (cron, same repo), `MySQL` (Railway native plugin, `mysql:9.4`). **Fully verified end to end on 2026-08-01/02**: real `mautic:install` completed, real login page returns `200` with genuine username/password fields, worker consumes the message queue cleanly, cron passes its database-based install-wait check and registers its crontab, all three survive a real redeploy cycle. This took **7 distinct real bugs**, each found via real logs/source, not guessed, documented in section 5. Don't skip reading section 0 before touching this template again.
 
 ---
 
 ## 0. Real Architecture Problem This Template Solves (read before touching variables)
 
-Mautic's official Docker image normally expects web, worker, and cron to share one config file (`local.php`) that records install state and a shared encryption key (`secret_key`). **Railway does not support attaching one volume to multiple services**, confirmed via Railway's own community help station, so a naive 3-service split would leave worker and cron waiting forever for an install signal they can never receive, or generate a mismatched encryption key if they installed independently.
+Mautic's official Docker image normally expects web, worker, and cron to share one config file (`local.php`) that records install state and a shared encryption key (`secret_key`). **Railway does not support attaching one volume to multiple services**, confirmed via Railway's own community help station, so a naive 3-service split leaves worker/cron waiting forever for an install signal they can never receive, or generates a mismatched encryption key if they installed independently.
 
-This template's fix: a custom `/templates/local.php` (baked into the image) that populates `site_url` and `secret_key` from shared environment variables identically on every service's own local volume, and a custom `entrypoint_mautic_web.sh` that always runs `mautic:install` (safe, it's idempotent, confirmed via Mautic's real `InstallCommand.php` source) and then re-syncs `secret_key` back to the shared env var value after install, since a genuine first install generates its own random one that would otherwise only exist on web. **`MAUTIC_SECRET_KEY` must be the exact same value on all three services** for this to work, it's the one true cross-service consistency requirement in this whole template.
+**The real, verified fix, five cooperating pieces:**
+1. `local.php` (custom template): populates `secret_key` from a shared env var on every service's own local volume. Deliberately does **NOT** set `site_url` here, Mautic's own `mautic:install` checks that exact field to decide whether to skip installing, and a pre-populated value defeats it on every boot, confirmed via a real crash where migrations failed against tables that were never created.
+2. `entrypoint_mautic_web.sh` (custom): checks the **real database** (`SHOW TABLES LIKE 'users'`) instead of trusting Mautic's own local.php-based check, decides whether to run `mautic:install`, then unconditionally patches `local.php` with the real `site_url` and the shared `secret_key` regardless of which branch ran (a genuine install writes site_url but a fresh random secret_key; a skipped install writes neither).
+3. `docker-entrypoint-wrapper.sh` (new top-level `ENTRYPOINT`): symlinks web's `config` and `docroot/media` into subdirectories of **one** real Railway Volume (`/mnt/mautic-persist`), since both need to survive restarts but Railway only allows one volume per service. Also `chown`s the real target directories directly, not the symlinks (chown on a symlink argument chowns the symlink itself, not what it points to).
+4. `check_volumes_exist_ownership.sh` (overridden): creates the six directories the base image assumes docker-compose would auto-create via separate volumes, instead of hard-failing when they're missing.
+5. `wait_for_mautic_install.sh` (overridden): worker/cron use this same real-database check instead of the local.php-based stock one, since their own local.php always looks "complete" from boot (by design, see point 1) regardless of real DB state.
+
+**`MAUTIC_SECRET_KEY` must be the exact same value on all three services** for this to work, it's the one true cross-service consistency requirement in this whole template.
 
 ---
 
 ## 1. Healthcheck Settings
 
-### `mautic-web` (app service)
-- **Healthcheck Path:** `/` or a real Mautic health/login-page path, verify the exact real behavior against the live deploy, not assumed. **Post-deploy:** confirm the actual path once live.
+### `mautic-railway` (web app service)
+- **Healthcheck Path:** `/s/login`, confirmed live returning `200` with a real login form. **Target port must be explicitly set to `80`** in the dashboard's Networking settings, confirmed this does NOT auto-populate from `PORT` env var or `EXPOSE 80` in the Dockerfile, real deploy showed `targetPort: null` and 502s until manually set. No CLI command found to set this on an existing domain (`railway domain -p <port>` only applies when creating a new domain).
 
-### `mautic-worker` / `mautic-cron` (app services)
+### `harmonious-light` (worker) / `focused-encouragement` (cron)
 - **No HTTP healthcheck.** Neither exposes a public port. Rely on `restartPolicyType = "on_failure"` instead.
 
 ### `MySQL` (native plugin)
@@ -29,25 +36,26 @@ This template's fix: a custom `/templates/local.php` (baked into the image) that
 
 ## 2. Variable Descriptions (Add to EVERY variable, on all three Mautic services)
 
-### `mautic-web`, `mautic-worker`, `mautic-cron` (shared variable set, values must match across all three except where noted)
+### `mautic-railway`, `harmonious-light`, `focused-encouragement` (shared set, values must match across all three except role)
 
 | Variable | Value | Mark Optional? | Description |
 |----------|-------|-----------------|-------------|
 | `DOCKER_MAUTIC_ROLE` | `mautic_web` / `mautic_worker` / `mautic_cron` (different per service) | No | Which Mautic process this service runs. |
-| `MAUTIC_DB_HOST` | `${{MySQL.MYSQLHOST}}` (verify real variable name post-deploy) | No | MySQL private hostname. |
-| `MAUTIC_DB_PORT` | `${{MySQL.MYSQLPORT}}` (verify real variable name post-deploy) | No | MySQL port. |
-| `MAUTIC_DB_DATABASE` | `${{MySQL.MYSQLDATABASE}}` (verify real variable name post-deploy) | No | Database name. Note the real image expects `MAUTIC_DB_DATABASE`, not `MAUTIC_DB_NAME` (confirmed directly in Mautic's own `docker-mautic` source), the reference Railway template uses the wrong variable name here. |
-| `MAUTIC_DB_USER` | `${{MySQL.MYSQLUSER}}` (verify real variable name post-deploy) | No | MySQL username. |
-| `MAUTIC_DB_PASSWORD` | `${{MySQL.MYSQLPASSWORD}}` (verify real variable name post-deploy) | No | MySQL password. |
-| `MAUTIC_URL` | `https://${{mauticWeb.RAILWAY_PUBLIC_DOMAIN}}` | No | Must be identical on all three services, cross-referenced from the web service's own domain, not each service's own (worker/cron have no public domain). |
-| `MAUTIC_SECRET_KEY` | `${{secret(32)}}` set once, referenced as `${{mauticWeb.MAUTIC_SECRET_KEY}}` on worker/cron | No | Must be byte-identical across all three services, see section 0. This is the one variable where a naive independent `${{secret(32)}}` on each service would silently break cross-service decryption, matching the lesson already learned on Firecrawl's Postgres password. |
+| `MAUTIC_DB_HOST` | `${{MySQL.MYSQLHOST}}` | No | MySQL private hostname. Confirmed real variable name live. |
+| `MAUTIC_DB_PORT` | `${{MySQL.MYSQLPORT}}` | No | MySQL port. Confirmed real variable name live. |
+| `MAUTIC_DB_DATABASE` | `${{MySQL.MYSQLDATABASE}}` | No | Database name. The real image expects `MAUTIC_DB_DATABASE`, not `MAUTIC_DB_NAME` (confirmed directly in Mautic's own `docker-mautic` source), the reference Railway template uses the wrong variable name here. Confirmed real MySQL plugin variable name live. |
+| `MAUTIC_DB_USER` | `${{MySQL.MYSQLUSER}}` | No | MySQL username. Confirmed real variable name live. |
+| `MAUTIC_DB_PASSWORD` | `${{MySQL.MYSQLPASSWORD}}` | No | MySQL password. Confirmed real variable name live. |
+| `MAUTIC_URL` | `https://${{mautic-railway.RAILWAY_PUBLIC_DOMAIN}}` | No | Must be identical on all three services, cross-referenced from the web service's own domain. Confirmed live as `https://mautic-railway-production.up.railway.app`. |
+| `MAUTIC_SECRET_KEY` | `${{secret(32)}}` set once on `mautic-railway`, then `${{mautic-railway.MAUTIC_SECRET_KEY}}` on the other two | No | Must be byte-identical across all three, confirmed live via SHA-256 hash comparison without printing the value. |
 
-### `mautic-web` only (worker/cron don't need these)
+### `mautic-railway` only (worker/cron don't need these)
 
 | Variable | Value | Mark Optional? | Description |
 |----------|-------|-----------------|-------------|
 | `MAUTIC_ADMIN_EMAIL` | User-provided | No | Admin account email created on first install. |
 | `MAUTIC_ADMIN_PASSWORD` | `${{secret(32)}}` | No | Admin account password created on first install. |
+| `PORT` | `80` | **Yes** | Set explicitly during testing; did not actually resolve the 502/targetPort issue on its own, the real fix was the dashboard target-port field (see section 1). Keep this set regardless since it's a reasonable Railway convention, but don't rely on it alone. |
 
 ---
 
@@ -56,39 +64,49 @@ This template's fix: a custom `/templates/local.php` (baked into the image) that
 | Variable | Template Syntax |
 |----------|-----------------|
 | `MAUTIC_ADMIN_PASSWORD` | `${{secret(32)}}` (web only) |
-| `MAUTIC_SECRET_KEY` | `${{secret(32)}}` on `mautic-web`, then `${{mauticWeb.MAUTIC_SECRET_KEY}}` (a cross-reference, NOT another independent `${{secret(32)}}`) on `mautic-worker` and `mautic-cron` |
+| `MAUTIC_SECRET_KEY` | `${{secret(32)}}` on `mautic-railway`, then `${{mautic-railway.MAUTIC_SECRET_KEY}}` (a cross-reference, NOT another independent `${{secret(32)}}`) on the worker and cron services |
 
 ---
 
 ## 4. Volumes
 
-**Required on `mautic-web` only.** Mount a Railway Volume covering config, logs, and media (e.g. at `/var/www/html/config` for config, or a broader parent path, verify the real minimum viable mount point against the live deploy). User-uploaded media specifically needs to persist across redeploys.
+**Required on `mautic-railway` (web) only.** Mount at `/mnt/mautic-persist`. `docker-entrypoint-wrapper.sh` symlinks `config` and `docroot/media` subdirectories into it. **Confirmed live as the real fix for two real bugs**: (1) the mount point directory must already exist in the image at build time (`RUN mkdir -p /mnt/mautic-persist` in the Dockerfile) or Railway's volume silently doesn't attach at that path despite showing as attached in `railway volume list`, and (2) `chown -R` must target the real directories under the mount, not the symlink paths pointing to them.
 
-**Not required on `mautic-worker` or `mautic-cron`.** Their own config is regenerated deterministically from shared env vars on every boot (see section 0), so there's no real state to lose by leaving them without a volume. Document this deliberate asymmetry so it doesn't look like an oversight later.
+**Not required on worker or cron.** Their own config is regenerated deterministically from shared env vars on every boot (see section 0), so there's no real state to lose by leaving them without a volume.
 
 ---
 
-## 5. Known Troubleshooting
+## 5. Known Troubleshooting (7 real bugs found and fixed this build)
 
-- **Reference template bakes secrets into build-time ARGs.** `Shinyduo/mautic-railway`'s Dockerfile passes `MAUTIC_DB_PASSWORD` and `MAUTIC_ADMIN_PASSWORD` as Docker `ARG`s, which get embedded in image layers and require a full rebuild to rotate. This template uses genuine runtime environment variables instead.
-- **Reference template uses `mautic/mautic:latest`, unpinned.** This template pins `mautic/mautic:7.1.3-apache`, verified against Docker Hub's tags API as matching the current `latest` digest at authoring time. Re-verify before publishing if time has passed.
-- **`MAUTIC_DB_DATABASE`, not `MAUTIC_DB_NAME`.** Confirmed directly in the real image's entrypoint/template source. Using the wrong name silently leaves the database name unset.
-- **No shared volumes across services, this is the core architectural constraint this whole template is built around.** See section 0. Don't "simplify" this template later by removing the custom `local.php`/`entrypoint_mautic_web.sh` files, thinking they're unnecessary complexity, they're the actual fix for a real platform limitation, not incidental cruft.
-- **`mautic:install` is safe to run on every boot.** Confirmed via Mautic's own `InstallCommand.php`: it calls `checkIfInstalled()` first and no-ops with "Mautic already installed" if the schema exists. This is why the custom `entrypoint_mautic_web.sh` calls it unconditionally instead of trying to detect install state itself.
-- **Worker/cron may show early transient restarts on a brand new deploy.** Their own config is ready (from shared env vars) slightly before web's actual database schema exists. Railway's restart policy self-heals this. Confirmed as expected during testing, distinguish this from a genuine bug via `instance status: RUNNING` after a few retries, same diagnostic standard used on Firecrawl's transient ECONNREFUSED case.
-- **SMTP is not configured by this template.** Mautic needs a real transactional email provider configured through its own UI after deploying to actually send campaign emails. Document this clearly so a deployer doesn't think campaigns are broken when it's actually an unconfigured mailer.
+1. **Reference template bakes secrets into build-time ARGs.** `Shinyduo/mautic-railway`'s Dockerfile passes `MAUTIC_DB_PASSWORD`/`MAUTIC_ADMIN_PASSWORD` as Docker `ARG`s, embedded in image layers, requiring a full rebuild to rotate. This template uses genuine runtime environment variables instead.
+2. **Reference template uses `mautic/mautic:latest`, unpinned, and the current image generation doesn't auto-install from env vars at all** (that model changed upstream). This template pins `mautic/mautic:7.1.3-apache` and builds real install logic instead. Re-verify the pin is still current before publishing.
+3. **Missing directories crash on boot.** The base image assumes docker-compose gives each of six paths (config, var, var/logs, media, media/files, media/images) its own auto-created volume. Railway only allows one volume per service, so `check_volumes_exist_ownership.sh` is overridden to `mkdir -p` them instead of hard-failing.
+4. **`local.php` pre-populated with `site_url` defeats Mautic's own install-check.** `mautic:install`'s `checkIfInstalled()` only checks `local.php`'s `site_url`/`db_driver` fields, not the real database. Pre-populating `site_url` (needed so worker/cron don't wait forever with no shared volume) made every boot think it was "already installed" and skip the real install entirely. Fixed by checking the real database directly instead (`wait_for_mautic_install.sh`, `entrypoint_mautic_web.sh`).
+5. **Volume mount point must pre-exist in the image.** `railway volume list` showed the volume correctly attached at `/mnt/mautic-persist`, but the path was genuinely empty inside the running container until `RUN mkdir -p /mnt/mautic-persist` was added to the Dockerfile.
+6. **`chown -R` on a symlink argument chowns the symlink, not its target.** Caused real "Permission denied" errors writing uploaded media until the wrapper script was fixed to `chown` the real `/mnt/mautic-persist/*` paths directly.
+7. **A genuine Mautic 7.1.3 core bug, not caused by this template**: `OverrideIncludeExtension::includeWithEvent()` declares a `string` return type, but Twig 3.28+ (bundled in this image) can return a `Twig\Markup` object from `CoreExtension::include()`, throwing a `TypeError` on every page using the `include()` Twig function, including login. Matches a real, currently-open Mautic forum thread. Already fixed on Mautic's own `main` branch (return type widened to `string|Markup`) but not yet in a released image tag. This template ships the real fixed file directly (`OverrideIncludeExtension.php`). **Re-verify this override is still needed and drop it once a `7.2.0+` image tag is published** (check Docker Hub before every republish).
+
+**Other real, non-bug findings worth documenting:**
+- **`mautic:install` is safe to run on every boot.** It calls `checkIfInstalled()` (querying local.php, per bug #4 above) first and no-ops with "Mautic already installed" if already set, rather than erroring.
+- **Mautic logs caught exceptions to a file** (`var/logs/mautic_prod-YYYY-MM-DD.php`), never to stdout/stderr, so `railway logs` alone won't show real application errors, only crash-level ones. This is why bug #7 took so long to root-cause: the generic "Site is offline" page and a misleading PHP deprecation notice were the only stdout signal for several iterations, until a background polling loop (tailing recently-modified files under `var/`) was added to `entrypoint_mautic_web.sh` to surface the real exception. Keep that polling loop in the template, it's genuinely useful for a deployer debugging their own issues later, not just a one-off diagnostic hack.
+- **`railway logs -n <N>` can lag behind real container state by 30-60+ seconds** immediately after a redeploy, confirmed repeatedly this build. `railway logs --since <duration>` was more reliable for getting a complete, current picture. Don't conclude a container is hung from a short/incomplete `-n` log fetch, retry with `--since` before assuming something's actually broken.
+- **Worker/cron may show early transient restarts on a brand new deploy** (their own config is ready slightly before web's schema exists). Railway's restart policy self-heals this, same diagnostic standard as Firecrawl's transient ECONNREFUSED case.
+- **SMTP is not configured by this template.** A real transactional email provider must be configured through Mautic's own UI after deploying for campaigns to actually send.
 
 ---
 
 ## 6. Post-Deploy Steps
 
-After the template is published, test-deploy from a fresh Railway account (incognito window) and verify:
+**Verified once end to end on the real build project (`mautic`, 2026-08-01/02)**, status per step:
 
-1. No "needs configuration" prompts appear for any variable.
-2. Pull real `railway variables --json` from the MySQL plugin and confirm the exact variable names (`MYSQLHOST` etc. are placeholders in this draft, not confirmed).
-3. The `mautic-web` service comes online and reaches a real healthy state, confirm the actual healthcheck path against live behavior.
-4. Real deploy logs confirm `mautic:install` completed successfully on first boot (not just that the container started).
-5. Log in with the real admin credentials and confirm the dashboard loads.
-6. Build a real test campaign, add a test contact, trigger it, and confirm the email actually arrives (after configuring a real SMTP provider), proving the worker genuinely processes jobs, not just that the web UI loads.
-7. Confirm a scheduled task (segment rebuild or time-based trigger) actually fires on schedule, proving the cron service is genuinely running, not just present.
-8. Redeploy all three services together and confirm the admin login and any previously created campaign/contact data still work afterward, proving the deterministic-config approach from section 0 genuinely survives a real redeploy cycle, not just a first boot.
+1. No "needs configuration" prompts appear for any variable. ✅
+2. Real `railway variables --json` confirmed exact MySQL plugin variable names (`MYSQLHOST`/`MYSQLPORT`/`MYSQLDATABASE`/`MYSQLUSER`/`MYSQLPASSWORD`). ✅
+3. `mautic-railway` comes online; `/s/login` returns `200` with a real login form (confirmed via `grep` for username/password fields in the response body, not just a title check). ✅ **Requires the dashboard target-port fix from section 1, doesn't work via CLI/env var alone.**
+4. Real deploy logs confirm a genuine `mautic:install` run completed (`Mautic Install / Creating database / Creating schema / Loading fixtures / Creating admin user / Final steps / Install complete`), not just that the container started. ✅
+5. Worker (`harmonious-light`) logs show a clean Symfony Messenger worker waiting for jobs, no errors. ✅
+6. Cron (`focused-encouragement`) logs show it passing the database-based install-wait check and proceeding to register its crontab. ✅
+7. **Still pending as of this checkpoint, do before considering this template fully done**: log in with real admin credentials through the actual browser UI (not just confirming the login page renders), configure a real SMTP provider, build a real test campaign, add a test contact, trigger it, and confirm the email actually arrives, proving the worker genuinely processes jobs end to end.
+8. **Also still pending**: confirm a scheduled task (segment rebuild or time-based trigger) actually fires on schedule, proving cron is genuinely functional, not just running.
+9. **Also still pending**: redeploy all three services together and confirm admin login and any created campaign/contact data still work afterward, the real proof the deterministic-config approach in section 0 survives a genuine redeploy cycle, not just first boot (partially confirmed already via several redeploys during debugging, but worth one clean, deliberate pass once SMTP/campaign testing above is done).
+
+**When re-publishing this template later, repeat this pass on a fresh Railway account (incognito) once**, and specifically re-check whether bug #7's `OverrideIncludeExtension.php` override is still needed against whatever the then-current image tag is.
